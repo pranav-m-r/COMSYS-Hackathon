@@ -1,1 +1,0 @@
-image = transforms.ToPILImage(image)

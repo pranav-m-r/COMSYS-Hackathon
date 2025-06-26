@@ -5,7 +5,6 @@ from torch.utils.data import DataLoader
 from torchvision.utils import make_grid
 from torchvision import transforms
 import torch
-import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
@@ -44,6 +43,9 @@ testloader = DataLoader(test_data, batch_size=4, shuffle=True)
 #     plt.show()
 #     break
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(device)
+
 
 class CNN(nn.Module):
     def __init__(self):
@@ -63,42 +65,44 @@ class CNN(nn.Module):
         x = F.relu(self.fc2(x))
         x = self.fc3(x)
         return x
+    
+    def train(self, trainloader, num_epochs):
+        criterion = nn.CrossEntropyLoss()
+        optimizer = optim.SGD(cnn.parameters(), lr = 0.001, momentum=0.9)
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(device)
+        for epoch in range(25):
+
+            running_loss = 0.0
+            for i, data in enumerate(trainloader, 0):
+                images, labels = data
+                images, labels = images.to(device), labels.to(device)
+                optimizer.zero_grad()
+
+                outputs = cnn(images)
+                loss = criterion(outputs, labels)
+                loss.backward()
+                optimizer.step()
+
+                running_loss += loss.item()
+                if i % 10 == 0:
+                    print(f'{epoch+1}, {i+1}, loss : {running_loss/(i+1)}')
+
+        print('Finished Training')
+
+    def test(self, trainloader):
+        correct = 0
+        total = 0
+        with torch.no_grad():
+            for images, labels in testloader:
+                images, labels = images.to(device), labels.to(device)
+                outputs = cnn(images)
+                _, predicted = torch.max(outputs.data, 1)
+                total += labels.size(0)
+                correct += (predicted == labels).sum().item()
+
+        print('Accuracy of the network on the 10000 test images: %d %%' % (
+            100 * correct / total))
+
 cnn = CNN().to(device)
-
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(cnn.parameters(), lr = 0.001, momentum=0.9)
-
-for epoch in range(2):
-
-    running_loss = 0.0
-    for i, data in enumerate(trainloader, 0):
-        images, labels = data
-        images, labels = images.to(device), labels.to(device)
-        optimizer.zero_grad()
-
-        outputs = cnn(images)
-        loss = criterion(outputs, labels)
-        loss.backward()
-        optimizer.step()
-
-        running_loss += loss.item()
-        if i % 10 == 0:
-            print(f'{epoch+1}, {i+1}, loss : {running_loss/(i+1)}')
-
-print('Finished Training')
-
-correct = 0
-total = 0
-with torch.no_grad():
-    for images, labels in testloader:
-        images, labels = images.to(device), labels.to(device)
-        outputs = cnn(images)
-        _, predicted = torch.max(outputs.data, 1)
-        total += labels.size(0)
-        correct += (predicted == labels).sum().item()
-
-print('Accuracy of the network on the 10000 test images: %d %%' % (
-    100 * correct / total))
+cnn.train(trainloader, 25)
+cnn.test(testloader)
