@@ -8,8 +8,8 @@ from torchvision import transforms
 from torch.utils.data import DataLoader
 import os
 
-train_path = r"data/Comys_Hackathon5/Task_A/train"
-test_path = r"data/Comys_Hackathon5/Task_A/val"
+train_path = os.path.join("..", "data", "Comys_Hackathon5", "Task_A", "train")
+test_path = os.path.join("..", "data", "Comys_Hackathon5", "Task_A", "val")
 
 transform = transforms.Compose([
     transforms.Resize((224, 224)),  # Standard size for CNNs
@@ -20,14 +20,14 @@ transform = transforms.Compose([
 
 train_data = ImageFolder(train_path, transform=transform)
 test_data = ImageFolder(test_path, transform=transform)
-print(train_data.class_to_idx)
-print(test_data.class_to_idx)
+# print(train_data.class_to_idx)
+# print(test_data.class_to_idx)
 # print(data.samples)
 
-comsys_trainloader = DataLoader(train_data, batch_size=4, shuffle=True)
-comsys_testloader = DataLoader(test_data, batch_size=4, shuffle=True)
+comsys_trainloader = DataLoader(train_data, batch_size=16, shuffle=True)
+comsys_testloader = DataLoader(test_data, batch_size=16, shuffle=True)
 
-train_dataset = datasets.CelebA(root='./data', split='train', transform=transform, download=True)
+train_dataset = datasets.CelebA(root=os.path.join("..", "data"), split='train', transform=transform, download=False)
 
 class GenderDataset(torch.utils.data.Dataset):
     def __init__(self, celeb_dataset):
@@ -42,10 +42,10 @@ class GenderDataset(torch.utils.data.Dataset):
         return len(self.dataset)
     
 train_gender = GenderDataset(train_dataset)
-celeba_trainloader = DataLoader(train_gender, batch_size=16, shuffle=True)
+celeba_trainloader = DataLoader(train_gender, batch_size=32, shuffle=True)
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(device)
+# print(device)
 
 class CNN(nn.Module):
     def __init__(self):
@@ -103,13 +103,13 @@ class CNN(nn.Module):
 
 cnn = CNN().to(device)
 
-if os.path.exists("pretrained_weights.pth"):
-    cnn.load_state_dict(torch.load("pretrained_weights.pth", map_location=device))
+if os.path.exists("pretrained_weights_long.pth"):
+    cnn.load_state_dict(torch.load("pretrained_weights_long.pth", map_location=device))
     print("Loaded pretrained weights from CelebA")
 else:
-    cnn.fit(celeba_trainloader, 15)
-    torch.save(cnn.state_dict(), "pretrained_weights.pth")
+    cnn.fit(celeba_trainloader, 20)
+    torch.save(cnn.state_dict(), "pretrained_weights_long.pth")
     print("Pretraining completed. Storing weights ...")
 
-cnn.fit(comsys_trainloader, 25)
+cnn.fit(comsys_trainloader, 30)
 cnn.test(comsys_testloader)
