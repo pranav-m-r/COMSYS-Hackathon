@@ -190,39 +190,45 @@ optimizer_ada = optim.Adam(adaface.parameters(), lr=1e-4)
 # =====================
 # 5. TRAINING LOOP
 # =====================
-for epoch in range(10):
-    for images, labels in dataloader:
-        images = images.to(device)
-        labels = labels.to(device)
-        
-        # Step 1: Distortion correction
-        corrected = distortion_corrector(images)
-        
-        # Step 2: Face detection with MTCNN
-        faces = []
-        for img in corrected:
-            img_pil = transforms.ToPILImage()(img.cpu())
-            face = mtcnn(img_pil)
-            faces.append(face if face is not None else torch.zeros(3, 160, 160))
-        faces = torch.stack(faces).to(device)
-        
-        # Step 3: AdaFace training
-        logits, embeddings = adaface(faces, labels)
-        
-        # Use logits for cross-entropy
-        loss = torch.nn.functional.cross_entropy(logits, labels)
-        
-        # Backpropagation
-        optimizer_unet.zero_grad()
-        optimizer_ada.zero_grad()
-        loss.backward()
-        optimizer_unet.step()
-        optimizer_ada.step()
-    # Save weights after each epoch
-    torch.save(distortion_corrector.state_dict(), "distortion_corrector.pth")
-    torch.save(adaface.state_dict(), "adaface.pth")
-    print(f"Epoch {epoch+1} completed and weights saved.")
-
+def train(epochs):
+    for epoch in range(epochs):
+        for images, labels in dataloader:
+            images = images.to(device)
+            labels = labels.to(device)
+            
+            # Step 1: Distortion correction
+            corrected = distortion_corrector(images)
+            
+            # Step 2: Face detection with MTCNN
+            faces = []
+            for img in corrected:
+                img_pil = transforms.ToPILImage()(img.cpu())
+                face = mtcnn(img_pil)
+                if face is None:
+                    faces.append(torch.zeros(3, 160, 160))
+                elif face.ndim == 4:
+                    faces.append(face[0])
+                else:
+                    faces.append(face) 
+            faces = torch.stack(faces).to(device)
+            
+            # Step 3: AdaFace training
+            logits, embeddings = adaface(faces, labels)
+            
+            # Use logits for cross-entropy
+            loss = torch.nn.functional.cross_entropy(logits, labels)
+            
+            # Backpropagation
+            optimizer_unet.zero_grad()
+            optimizer_ada.zero_grad()
+            loss.backward()
+            optimizer_unet.step()
+            optimizer_ada.step()
+        # Save weights after each epoch
+        torch.save(distortion_corrector.state_dict(), "distortion_corrector.pth")
+        torch.save(adaface.state_dict(), "adaface.pth")
+        print(f"Epoch {epoch+1} completed and weights saved.")
+# train(10)
 # =====================
 # 6. TEST FUNCTION
 # =====================
@@ -251,6 +257,9 @@ def test(model, adaface, dataloader, device):
     return acc
 
 # Example usage:
-# test_loader = DataLoader(test_dataset, batch_size=8)
-# test(distortion_corrector, adaface, test_loader, device)
+
+
+test_dataset = FaceComDataset(root_dir='./data/Comys_Hackathon5/Task_B/val', transform=transform)
+test_loader = DataLoader(dataset, batch_size=8, shuffle=True)
+test(distortion_corrector, adaface, test_loader, device)
 
