@@ -106,56 +106,39 @@ class AdaFace(nn.Module):
 # 3. DATA LOADER
 # =====================
 class FaceComDataset(Dataset):
-    def __init__(self, root_dir, transform=None):
-        self.root_dir = root_dir
+    def __init__(self, image_label_list, transform=None):
+        self.image_label_list = image_label_list
         self.transform = transform
-        self.image_paths = []
-        self.labels = []
-        
-        # Map person folders to labels
-        self.person_folders = sorted([d for d in os.listdir(root_dir) if os.path.isdir(os.path.join(root_dir, d))])
-        self.label_dict = {person: idx for idx, person in enumerate(self.person_folders)}
-        
-        # Collect image paths and labels
-        for person in self.person_folders:
-            person_dir = os.path.join(root_dir, person)
-            for img_name in os.listdir(person_dir):
-                if img_name.endswith(('.jpg', '.png', '.jpeg')):
-                    self.image_paths.append(os.path.join(person_dir, img_name))
-                    self.labels.append(self.label_dict[person])
-    
+
     def __len__(self):
-        return len(self.image_paths)
-    
+        return len(self.image_label_list)
+
     def __getitem__(self, idx):
-        img_path = self.image_paths[idx]
+        img_path, label = self.image_label_list[idx]
         image = Image.open(img_path).convert('RGB')
-        label = self.labels[idx]
-
-        # Resize to fixed size before augmentation
         image = image.resize((256, 256), Image.BILINEAR)
-
         if self.transform:
-            image_np = np.array(image)  # Convert PIL to numpy array
-            image_np = self.transform(image=image_np)  # imgaug expects numpy array
-            if isinstance(image_np, dict):  # imgaug >=0.4.0 returns dict
-                image_np = image_np["image"]
-            image = torch.from_numpy(image_np).permute(2, 0, 1).float() / 255.0  # HWC to CHW, scale to [0,1]
+            image_np = np.array(image)
+            # If using imgaug (for train), call with keyword
+            if hasattr(self.transform, 'augment'):
+                image_np = self.transform(image=image_np)
+                if isinstance(image_np, dict):
+                    image_np = image_np["image"]
+                image = torch.from_numpy(image_np).permute(2, 0, 1).float() / 255.0
+            else:
+                # For torchvision transforms (test), call directly on PIL image
+                image = self.transform(image)
         else:
             image = transforms.ToTensor()(image)
-
         return image, label
 
 # =====================
 # 4. MAIN PIPELINE
 # =====================
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-mtcnn = MTCNN(keep_all=True, device=device)
-distortion_corrector = UNet().to(device)
-adaface = AdaFace(num_classes=1000).to(device)  # Adjust num_classes
 
 # Dataset and augmentation
-transform = iaa.Sequential([
+train_transform = iaa.Sequential([
     iaa.Fliplr(0.5),
     iaa.CloudLayer(
         intensity_mean=0.5,
@@ -171,9 +154,47 @@ transform = iaa.Sequential([
     iaa.Rain(drop_size=(0.01, 0.05)),
     iaa.GammaContrast((0.5, 2.0))
 ])
+test_transform = transforms.Compose([
+    transforms.Resize((256, 256)),
+    transforms.ToTensor()
+])
 
-dataset = FaceComDataset(root_dir='./data/Comys_Hackathon5/Task_B/train', transform=transform)
-dataloader = DataLoader(dataset, batch_size=8, shuffle=True)
+# 1. Build label_dict from all person folders
+train_root = './data/Comys_Hackathon5/Task_B/train'
+person_folders = sorted([d for d in os.listdir(train_root) if os.path.isdir(os.path.join(train_root, d))])
+label_dict = {person: idx for idx, person in enumerate(person_folders)}
+
+# 2. Collect undistorted (train) and distorted (test) image paths and labels
+train_image_label_list = []
+test_image_label_list = []
+
+for person in person_folders:
+    person_dir = os.path.join(train_root, person)
+    # Add undistorted image(s): directly inside person_dir, not in 'distortion'
+    for fname in os.listdir(person_dir):
+        fpath = os.path.join(person_dir, fname)
+        if os.path.isfile(fpath) and fname.lower().endswith(('.jpg', '.jpeg', '.png')):
+            train_image_label_list.append((fpath, label_dict[person]))
+    # Add distorted images: inside person_dir/distortion/
+    distortion_dir = os.path.join(person_dir, 'distortion')
+    if os.path.isdir(distortion_dir):
+        for fname in os.listdir(distortion_dir):
+            fpath = os.path.join(distortion_dir, fname)
+            if os.path.isfile(fpath) and fname.lower().endswith(('.jpg', '.jpeg', '.png')):
+                test_image_label_list.append((fpath, label_dict[person]))
+
+# 3. Create datasets and dataloaders
+train_dataset = FaceComDataset(train_image_label_list, transform=train_transform)
+test_dataset = FaceComDataset(test_image_label_list, transform=test_transform)
+
+train_loader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+test_loader = DataLoader(test_dataset, batch_size=8, shuffle=False)
+
+num_classes = len(label_dict)
+adaface = AdaFace(num_classes=num_classes).to(device)
+
+distortion_corrector = UNet().to(device)
+mtcnn = MTCNN(keep_all=True, device=device)
 
 # Load weights if available
 if os.path.exists("distortion_corrector.pth"):
@@ -192,7 +213,7 @@ optimizer_ada = optim.Adam(adaface.parameters(), lr=1e-4)
 # =====================
 def train(epochs):
     for epoch in range(epochs):
-        for images, labels in dataloader:
+        for images, labels in train_loader:
             images = images.to(device)
             labels = labels.to(device)
             
@@ -228,7 +249,6 @@ def train(epochs):
         torch.save(distortion_corrector.state_dict(), "distortion_corrector.pth")
         torch.save(adaface.state_dict(), "adaface.pth")
         print(f"Epoch {epoch+1} completed and weights saved.")
-# train(10)
 # =====================
 # 6. TEST FUNCTION
 # =====================
@@ -246,20 +266,24 @@ def test(model, adaface, dataloader, device):
             for img in corrected:
                 img_pil = transforms.ToPILImage()(img.cpu())
                 face = mtcnn(img_pil)
-                faces.append(face if face is not None else torch.zeros(3, 160, 160))
+                if face is None:
+                    faces.append(torch.zeros(3, 160, 160))
+                elif face.ndim == 4:
+                    faces.append(face[0])
+                else:
+                    faces.append(face) 
             faces = torch.stack(faces).to(device)
             logits, _ = adaface(faces)
             preds = torch.argmax(logits, dim=1)
             correct += (preds == labels).sum().item()
             total += labels.size(0)
+            print("Predicted class counts:", torch.bincount(preds))
+            print("True class counts:", torch.bincount(labels))
     acc = correct / total if total > 0 else 0
     print(f"Test Accuracy: {acc*100:.2f}%")
     return acc
 
 # Example usage:
-
-
-test_dataset = FaceComDataset(root_dir='./data/Comys_Hackathon5/Task_B/val', transform=transform)
-test_loader = DataLoader(dataset, batch_size=8, shuffle=True)
+# train(20)
 test(distortion_corrector, adaface, test_loader, device)
 
